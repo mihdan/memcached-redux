@@ -471,7 +471,7 @@ if ( class_exists( 'Memcached' ) ) {
 			return $this->mc['default'];
 		}
 
-		function WP_Object_Cache() {
+		function __construct() {
 			global $memcached_servers;
 
 			if ( isset( $memcached_servers ) ) {
