@@ -152,9 +152,6 @@ if ( class_exists( 'Memcached' ) ) {
 			$result = $mc->add( $key, $data, $expire );
 
 			if ( false !== $result ) {
-				if ( ! isset( $this->stats['add'] ) ) {
-					$this->stats['add'] = 0;
-				}
 				@ ++ $this->stats['add'];
 				$this->group_ops[ $group ][] = "add $id";
 				$this->cache[ $key ]         = $data;
@@ -214,9 +211,6 @@ if ( class_exists( 'Memcached' ) ) {
 
 			$result = $mc->delete( $key );
 
-			if ( ! isset( $this->stats['delete'] ) ) {
-				$this->stats['delete'] = 0;
-			}
 			@ ++ $this->stats['delete'];
 			$this->group_ops[ $group ][] = "delete $id";
 
@@ -269,9 +263,6 @@ if ( class_exists( 'Memcached' ) ) {
 				$this->cache[ $key ] = $value;
 			}
 
-			if ( ! isset( $this->stats['get'] ) ) {
-				$this->stats['get'] = 0;
-			}
 			@ ++ $this->stats['get'];
 			$this->group_ops[ $group ][] = "get $id";
 
@@ -321,9 +312,6 @@ if ( class_exists( 'Memcached' ) ) {
 				$return  = array_merge( $return, $joined );
 			}
 
-			if ( ! isset( $this->stats['get_multi'] ) ) {
-				$this->stats['get_multi'] = 0;
-			}
 			@ ++ $this->stats['get_multi'];
 			$this->group_ops[ $group ][] = "get_multi $id";
 			$this->cache                 = array_merge( $this->cache, $return );
@@ -472,7 +460,15 @@ if ( class_exists( 'Memcached' ) ) {
 		}
 
 		function __construct() {
+
 			global $memcached_servers;
+
+			$this->stats = [
+				'add' => 0,
+				'delete' => 0,
+				'get' => 0,
+				'get_multi' => 0,
+			];
 
 			if ( isset( $memcached_servers ) ) {
 				$buckets = $memcached_servers;

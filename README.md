@@ -21,4 +21,4 @@ wp_cache_set_multi( array(
 ) );
 ```
 
-Blog Post: http://scotty-t.com/2012/06/05/memcached-redux/
+Blog Post: [http://scotty-t.com/2012/06/05/memcached-redux/](http://scotty-t.com/2012/06/05/memcached-redux/)
