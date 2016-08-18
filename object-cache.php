@@ -131,6 +131,84 @@ if ( class_exists( 'Memcached' ) ) {
 
 		var $cache_enabled = true;
 		var $default_expiration = 0;
+		var $key_salt;
+
+		var $flush_number = array();
+		var $global_flush_number = null;
+
+		function __construct() {
+
+			global $memcached_servers;
+
+			$this->stats = [
+				'add' => 0,
+				'delete' => 0,
+				'get' => 0,
+				'get_multi' => 0,
+			];
+
+			if ( isset( $memcached_servers ) ) {
+				$buckets = $memcached_servers;
+			} else {
+				$buckets = array( '127.0.0.1:11211' );
+			}
+
+			reset( $buckets );
+			if ( is_int( key( $buckets ) ) ) {
+				$buckets = array( 'default' => $buckets );
+			}
+
+			foreach ( $buckets as $bucket => $servers ) {
+				$this->mc[ $bucket ] = new Memcached();
+
+				$instances = array();
+				foreach ( $servers as $server ) {
+
+					if ( 'unix://' == substr( $server, 0, 7 ) ) {
+						$node = $server;
+						$port = 0;
+					} else {
+						@list( $node, $port ) = explode( ':', $server );
+						if ( empty( $port ) ) {
+							$port = ini_get( 'memcache.default_port' );
+						}
+						$port = intval( $port );
+						if ( ! $port ) {
+							$port = 11211;
+						}
+					}
+					$instances[] = array( $node, $port, 1 );
+				}
+
+				// Добавить пул серверов
+				$this->mc[ $bucket ]->addServers( $instances );
+
+				// Включить сжатие
+				$this->mc[ $bucket ]->setOption( Memcached::OPT_COMPRESSION, true );
+				//$this->mc[ $bucket ]->setOption(Memcached::OPT_NO_BLOCK, true);
+				// Memcached::HAVE_JSON
+
+			}
+
+			global $blog_id, $table_prefix;
+			$this->global_prefix = '';
+			$this->blog_prefix   = '';
+			if ( function_exists( 'is_multisite' ) ) {
+				$this->global_prefix = ( is_multisite() || defined( 'CUSTOM_USER_TABLE' ) && defined( 'CUSTOM_USER_META_TABLE' ) ) ? '' : $table_prefix;
+				$this->blog_prefix   = ( is_multisite() ? $blog_id : $table_prefix ) . ':';
+			}
+
+			$this->salt_keys( WP_CACHE_KEY_SALT );
+			$this->cache_hits   =& $this->stats['get'];
+			$this->cache_misses =& $this->stats['add'];
+		}
+
+		function salt_keys( $key_salt ) {
+			if ( strlen( $key_salt ) )
+				$this->key_salt = $key_salt . ':';
+			else
+				$this->key_salt = '';
+		}
 
 		function add( $id, $data, $group = 'default', $expire = 0 ) {
 			$key = $this->key( $id, $group );
@@ -319,18 +397,50 @@ if ( class_exists( 'Memcached' ) ) {
 			return array_values( $return );
 		}
 
-		function key( $key, $group ) {
-			if ( empty( $group ) ) {
-				$group = 'default';
-			}
+		function rotate_site_keys() {
+			$this->add( 'flush_number', intval(microtime(true) * 1e6), 'WP_Object_Cache' );
+			$this->flush_number[ $this->blog_prefix ] = $this->incr( 'flush_number', 1, 'WP_Object_Cache' );
+		}
 
-			if ( false !== array_search( $group, $this->global_groups ) ) {
-				$prefix = $this->global_prefix;
+		function rotate_global_keys() {
+			$this->add( 'flush_number', intval(microtime(true) * 1e6), 'WP_Object_Cache_global' );
+			$this->global_flush_number = $this->incr( 'flush_number', 1, 'WP_Object_Cache_global' );
+		}
+
+		function flush_prefix( $group ) {
+			if ( $group === 'WP_Object_Cache' || $group === 'WP_Object_Cache_global' ) {
+				// Never flush the flush numbers.
+				$number = '_';
+			} elseif ( false !== array_search($group, $this->global_groups) ) {
+				if ( ! isset( $this->global_flush_number ) )
+					$this->global_flush_number = intval( $this->get('flush_number', 'WP_Object_Cache_global') );
+				if ( $this->global_flush_number === 0 )
+					$this->rotate_global_keys();
+				$number = $this->global_flush_number;
 			} else {
-				$prefix = $this->blog_prefix;
+				if ( ! isset( $this->flush_number[ $this->blog_prefix ] ) )
+					$this->flush_number[ $this->blog_prefix ] = intval( $this->get('flush_number', 'WP_Object_Cache') );
+				if ( $this->flush_number[ $this->blog_prefix ] === 0 )
+					$this->rotate_site_keys();
+				$number = $this->flush_number[ $this->blog_prefix ];
 			}
+			return $number . ':';
+		}
 
-			return preg_replace( '/\s+/', '', WP_CACHE_KEY_SALT . "$prefix$group:$key" );
+		function key($key, $group) {
+			if ( empty($group) )
+				$group = 'default';
+
+			$prefix = $this->key_salt;
+
+			$prefix .= $this->flush_prefix( $group );
+
+			if ( false !== array_search($group, $this->global_groups) )
+				$prefix .= $this->global_prefix;
+			else
+				$prefix .= $this->blog_prefix;
+
+			return preg_replace('/\s+/', '', "$prefix:$group:$key");
 		}
 
 		function replace( $id, $data, $group = 'default', $expire = 0 ) {
@@ -457,59 +567,6 @@ if ( class_exists( 'Memcached' ) ) {
 			}
 
 			return $this->mc['default'];
-		}
-
-		function __construct() {
-
-			global $memcached_servers;
-
-			$this->stats = [
-				'add' => 0,
-				'delete' => 0,
-				'get' => 0,
-				'get_multi' => 0,
-			];
-
-			if ( isset( $memcached_servers ) ) {
-				$buckets = $memcached_servers;
-			} else {
-				$buckets = array( '127.0.0.1' );
-			}
-
-			reset( $buckets );
-			if ( is_int( key( $buckets ) ) ) {
-				$buckets = array( 'default' => $buckets );
-			}
-
-			foreach ( $buckets as $bucket => $servers ) {
-				$this->mc[ $bucket ] = new Memcached();
-
-				$instances = array();
-				foreach ( $servers as $server ) {
-					@list( $node, $port ) = explode( ':', $server );
-					if ( empty( $port ) ) {
-						$port = ini_get( 'memcache.default_port' );
-					}
-					$port = intval( $port );
-					if ( ! $port ) {
-						$port = 11211;
-					}
-
-					$instances[] = array( $node, $port, 1 );
-				}
-				$this->mc[ $bucket ]->addServers( $instances );
-			}
-
-			global $blog_id, $table_prefix;
-			$this->global_prefix = '';
-			$this->blog_prefix   = '';
-			if ( function_exists( 'is_multisite' ) ) {
-				$this->global_prefix = ( is_multisite() || defined( 'CUSTOM_USER_TABLE' ) && defined( 'CUSTOM_USER_META_TABLE' ) ) ? '' : $table_prefix;
-				$this->blog_prefix   = ( is_multisite() ? $blog_id : $table_prefix ) . ':';
-			}
-
-			$this->cache_hits   =& $this->stats['get'];
-			$this->cache_misses =& $this->stats['add'];
 		}
 	}
 } else { // No Memcached
