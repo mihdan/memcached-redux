@@ -245,8 +245,8 @@ if ( class_exists( 'Memcached' ) ) {
 			$key = $this->key( $id, $group );
 			$mc  =& $this->get_mc( $group );
 
-			if ( isset( $this->cache[ $key ] ) ) {
-
+			//if ( isset( $this->cache[ $key ] ) ) {
+			if ( isset( $this->cache[$key] ) && ( ! $force || in_array( $group, $this->no_mc_groups ) ) ) {
 				$found = true;
 
 				if ( is_object( $this->cache[ $key ] ) ) {
@@ -262,7 +262,7 @@ if ( class_exists( 'Memcached' ) ) {
 				$value = $mc->get( $key );
 				if ( empty( $value ) || ( is_integer( $value ) && - 1 == $value ) ) {
 					$value = false;
-					$found = false;
+					$found = $mc->getResultCode() !== Memcached::RES_NOTFOUND;
 				} else {
 					$found = true;
 				}
